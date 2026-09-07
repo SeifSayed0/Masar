@@ -564,6 +564,27 @@ function overlay(html){document.querySelector('.cloud-auth')?.remove();const o=d
 function loginModal(mode='login'){const signup=mode==='signup';const o=overlay('<div class="os-kicker">Student OS · الحساب</div><h2>'+ (signup?'إنشاء حساب طالب':'تسجيل الدخول')+'</h2><p>'+(signup?'احفظ خطتك وبياناتك لتصل إليها من أي جهاز.':'ادخل إلى مساحة مذاكرتك المحفوظة.')+'</p><label>البريد الإلكتروني</label><input id="cloud-email" type="email" placeholder="you@example.com"><label>كلمة المرور</label><input id="cloud-password" type="password" placeholder="6 أحرف على الأقل"><div class="os-actions"><button class="os-primary" data-cloud="submit">'+(signup?'إنشاء الحساب':'دخول')+'</button><button class="os-secondary" data-cloud="switch">'+(signup?'لدي حساب بالفعل':'إنشاء حساب جديد')+'</button></div><div id="cloud-message"></div>');o.addEventListener('click',async e=>{const a=e.target.dataset.cloud;if(a==='switch'){loginModal(signup?'login':'signup');return}if(a==='submit'){const email=o.querySelector('#cloud-email').value.trim(),password=o.querySelector('#cloud-password').value;const msg=o.querySelector('#cloud-message');if(!email||password.length<6){msg.className='cloud-error';msg.textContent='اكتب بريدًا صحيحًا وكلمة مرور من 6 أحرف على الأقل.';return}e.target.disabled=true;try{const d=await auth(signup?'/signup':'/token?grant_type=password',{email,password});session=d;localStorage.setItem(TOKEN_KEY,JSON.stringify(d));msg.className='cloud-success';msg.textContent=signup?'تم إنشاء الحساب. افحص بريدك إذا طلب Supabase التأكيد.':'تم تسجيل الدخول بنجاح.';accountButton();setTimeout(()=>o.remove(),800)}catch(err){msg.className='cloud-error';msg.textContent=err.message;e.target.disabled=false}}})}
 function accountModal(){const email=session?.user?.email||'';const o=overlay('<div class="os-kicker">Student OS · الحساب السحابي</div><h2>حسابك متصل</h2><p>'+email+'</p><div class="os-actions"><button class="os-primary" data-cloud="sync">حفظ بيانات التجربة</button><button class="os-secondary" data-cloud="logout">تسجيل الخروج</button></div><div id="cloud-message"></div>');o.addEventListener('click',async e=>{const msg=o.querySelector('#cloud-message');if(e.target.dataset.cloud==='logout'){await fetch(AUTH+'/logout',{method:'POST',headers:headers(session.access_token)}).catch(()=>{});session=null;localStorage.removeItem(TOKEN_KEY);accountButton();o.remove();return}if(e.target.dataset.cloud==='sync'){try{const local={name:'سيف',courses:['الإحصاء','التصنيف','أمراض النبات'],updatedAt:new Date().toISOString()};const d=await auth('/user',{data:{student_os:local}},session.access_token);session.user=d;localStorage.setItem(TOKEN_KEY,JSON.stringify(session));msg.className='cloud-success';msg.textContent='تم حفظ بياناتك في حساب Supabase.'}catch(err){msg.className='cloud-error';msg.textContent=err.message}}})}
 async function restore(){if(!session?.access_token)return;try{const d=await auth('/user',null,session.access_token);session.user=d;localStorage.setItem(TOKEN_KEY,JSON.stringify(session))}catch(e){session=null;localStorage.removeItem(TOKEN_KEY)}}
-window.studentOSCloud={login:loginModal,logout:()=>{session=null;localStorage.removeItem(TOKEN_KEY);accountButton()},getSession:()=>session};
+window.studentOSCloud={login:loginModal,logout:()=>{session=null;localStorage.removeItem(TOKEN_KEY);accountButton()},getSession:()=>session,setMode:function(mode){localStorage.setItem('student_os_mode',mode)}};
 setTimeout(async()=>{await restore();accountButton()},700);
+})();
+
+/* First-run authentication gate: demo data is never treated as a real account. */
+(function(){
+  function gate(){
+    if(localStorage.getItem('student_os_supabase_session') || localStorage.getItem('student_os_guest')) return;
+    if(document.getElementById('os-auth-gate')) return;
+    var x=document.createElement('div'); x.id='os-auth-gate';
+    x.style='position:fixed;inset:0;z-index:10050;background:rgba(15,31,45,.52);display:grid;place-items:center;padding:18px;direction:rtl;font-family:inherit';
+    x.innerHTML='<div style="width:min(500px,100%);background:#fff;border-radius:18px;padding:30px;box-shadow:0 25px 80px #0004;text-align:right">'
+      +'<div style="color:#6e8586;font-size:11px;font-weight:bold;letter-spacing:.12em">STUDENT OS · أول زيارة</div>'
+      +'<h2 style="color:#253944;margin:10px 0;font-size:26px">أهلًا بك في Student OS</h2>'
+      +'<p style="color:#718083;line-height:1.8;margin:0 0 20px">سجّل دخولك لكي نحفظ خطتك وموادك وبيانات تقدمك. لن نعتبر بيانات التجربة حسابًا حقيقيًا.</p>'
+      +'<button data-gate="login" style="width:100%;padding:12px;border:0;border-radius:9px;background:#253f55;color:white;font-weight:bold;cursor:pointer;margin-bottom:9px">تسجيل الدخول</button>'
+      +'<button data-gate="signup" style="width:100%;padding:12px;border:1px solid #d9e0dc;border-radius:9px;background:white;color:#253944;font-weight:bold;cursor:pointer;margin-bottom:9px">إنشاء حساب جديد</button>'
+      +'<button data-gate="guest" style="width:100%;padding:10px;border:0;background:transparent;color:#6e8586;cursor:pointer">الدخول كتجربة مؤقتة بدون حفظ</button>'
+      +'</div>';
+    document.body.appendChild(x);
+    x.addEventListener('click',function(e){var a=e.target.dataset.gate;if(!a)return;if(a==='guest'){localStorage.setItem('student_os_guest','1');x.remove();if(window.studentOSCloud)window.studentOSCloud.setMode&&window.studentOSCloud.setMode('guest')}else{ x.remove(); if(window.studentOSCloud&&window.studentOSCloud.login) window.studentOSCloud.login(a==='signup'?'signup':'login'); }});
+  }
+  setTimeout(gate,900);
 })();
