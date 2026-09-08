@@ -25,3 +25,12 @@ This is a static site. Put `index.html`, `app.js`, `styles.css`, `assets/`, and 
 
 ## Important
 The current release is a fully interactive front-end prototype. The UI flows are functional locally; Supabase Auth and live database synchronization are intentionally the next integration layer.
+
+
+## MASAR 2.2 fixes
+- Fixed page header actions so Arabic and English both render working CTA buttons.
+- Fixed exam save flow with validation and success feedback.
+- Fixed recovery apply flow so the modal closes after applying and the plan re-renders.
+- Added Enter-to-save behavior in modals.
+- Added confirmation before exiting Focus without logging.
+- Reworked rebuild/recovery rendering to avoid double-render race-like behavior.
