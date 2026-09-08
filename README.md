@@ -39,3 +39,9 @@ MASAR 3.1 keeps working in local mode until Supabase is configured. To enable ac
 5. Deploy the repository again on Vercel.
 
 The browser client uses `@supabase/supabase-js` and persistent auth sessions. This follows Supabase's browser client and password-auth flow. See the official docs: https://supabase.com/docs/reference/javascript/initializing and https://supabase.com/docs/guides/auth/passwords.
+
+
+## 3.1.2 Auth delivery fix
+- Signup explicitly requests a confirmation email after Supabase returns a user without a session.
+- Unconfirmed password sign-in automatically attempts a confirmation resend.
+- PKCE callback and persistent session handling remain enabled.

@@ -184,15 +184,44 @@
       err.textContent = authErrorMessage(result.error);
       if (String(result.error.message || '').toLowerCase().includes('email not confirmed')) {
         resend.hidden = false;
+        try {
+          await client.auth.resend({
+            type: 'signup',
+            email,
+            options: { emailRedirectTo: redirectUrl() }
+          });
+          err.textContent = 'البريد الإلكتروني لم يتم تأكيده بعد. أعدنا إرسال رسالة التأكيد؛ راجع Inbox وSpam/Junk.';
+        } catch (_) {}
       }
       return;
     }
 
     if (mode === 'signup' && !result.data.session) {
+      // Supabase returns a user with no session when email confirmation is required.
+      // Explicitly request a confirmation email as a second, deterministic step.
+      // This also helps when a signup response was created successfully but the
+      // provider did not deliver the first message. Supabase applies its own
+      // resend/rate limits.
+      let resendError = null;
+      try {
+        const resendResult = await client.auth.resend({
+          type: 'signup',
+          email,
+          options: { emailRedirectTo: redirectUrl() }
+        });
+        resendError = resendResult.error || null;
+      } catch (e) {
+        resendError = e;
+      }
+
+      const resendNote = resendError
+        ? `<p class="form-hint">${authErrorMessage(resendError).replace(/</g, '&lt;')}</p>`
+        : `<p class="form-hint">A fresh confirmation email has been requested.</p>`;
+
       window.MASAR.modal(
         'Check your email',
         'One more step before your account is ready.',
-        `<div class="empty"><strong>Account created.</strong><p>We sent a confirmation link to <strong>${email.replace(/</g, '&lt;')}</strong>.</p><p>Open the email, tap the confirmation link, and Masar will finish the sign-in automatically. You can then return to Masar normally.</p></div>`,
+        `<div class="empty"><strong>Account created.</strong><p>Confirmation is required for <strong>${email.replace(/</g, '&lt;')}</strong>.</p><p>We requested a fresh confirmation email. Check Inbox and Spam/Junk, then open the confirmation link on this same device.</p>${resendNote}</div>`,
         `<button class="btn" data-action="close-modal">${window.MASAR.t('close')}</button><button class="btn btn-primary" data-cloud="resend-confirmation" data-resend-email="${email.replace(/"/g, '&quot;')}">Resend email</button>`
       );
       return;
