@@ -45,3 +45,7 @@ The browser client uses `@supabase/supabase-js` and persistent auth sessions. Th
 - Signup explicitly requests a confirmation email after Supabase returns a user without a session.
 - Unconfirmed password sign-in automatically attempts a confirmation resend.
 - PKCE callback and persistent session handling remain enabled.
+
+
+## 3.1.3 Auth Diagnostic Fix
+This build removes the automatic immediate resend after signup, which could mask the actual signup response behind Supabase email cooldowns. It shows the returned user/session/confirmation state and handles resend errors explicitly. The Supabase PKCE callback remains enabled.
