@@ -1,36 +1,29 @@
-# MASAR — Student Operating System
+# MASAR 3.0
 
-MASAR is a calm, adaptive student workspace focused on one core question: **What should I study now?**
+واجهة وإطار عمل Front-end أعيد بناؤه حول الفكرة الأساسية: **ماذا تذاكر الآن؟** ثم تحويل القرار إلى جلسة، تقدم، وخطة قابلة لإعادة الترتيب.
 
-## What is included
-- Today command center with a prominent "What should you study now?" priority card.
-- Weekly planner with generated study blocks.
-- Courses, exams and tasks with create/edit/delete flows.
-- Exam readiness and risk indicators.
-- Focus mode with pause/resume/finish and session logging.
-- Recovery strategies that rebalance open work.
-- Progress dashboard and export.
-- Search / command palette (`Ctrl/Cmd + K`).
-- Arabic RTL + English LTR.
-- Light / dark mode.
-- Responsive desktop/tablet/mobile navigation.
-- Local persistence using `localStorage`.
-- Supabase schema prepared in `supabase/schema.sql` for the cloud phase.
+## التشغيل
+لا يوجد build step. ارفع محتويات هذا المجلد إلى GitHub بحيث يكون `index.html` في جذر المستودع، وسيعمل على Vercel/Netlify/static hosting.
 
-## Deploy
-This is a static site. Put `index.html`, `app.js`, `styles.css`, `assets/`, and the optional config/deployment files in the repository root. Vercel will deploy automatically from the connected branch.
+## البيانات الحالية
+MASAR 3.0 يستخدم طبقة تخزين محلية `localStorage` تحت المفتاح `masar.v4.state`. تم فصل منطق الحالة عن الواجهة بحيث يمكن استبداله بطبقة Supabase لاحقًا.
+
+## ما تم تضمينه
+- Today Command Center
+- Planner + workload analysis
+- Courses CRUD
+- Exams CRUD مع جاهزية 0–100
+- Tasks CRUD + completion
+- Focus mode مع pause/resume/finish وتسجيل الجلسة
+- Recovery strategies + إعادة بناء الخطة
+- Search / ⌘K
+- Notifications
+- Progress + export
+- RTL/LTR
+- Light/Dark
+- Mobile navigation
+- SVG icon system
+- Empty/success/error validation states
 
 ## Supabase
-`supabase/schema.sql` is a database blueprint. Run it in Supabase SQL Editor when moving from the local prototype to the cloud-connected version. Never commit a `service_role` key or other secrets.
-
-## Important
-The current release is a fully interactive front-end prototype. The UI flows are functional locally; Supabase Auth and live database synchronization are intentionally the next integration layer.
-
-
-## MASAR 2.2 fixes
-- Fixed page header actions so Arabic and English both render working CTA buttons.
-- Fixed exam save flow with validation and success feedback.
-- Fixed recovery apply flow so the modal closes after applying and the plan re-renders.
-- Added Enter-to-save behavior in modals.
-- Added confirmation before exiting Focus without logging.
-- Reworked rebuild/recovery rendering to avoid double-render race-like behavior.
+`supabase/schema.sql` هو مخطط قاعدة البيانات، لكنه **ليس اتصالًا سحابيًا تلقائيًا**. لا تضع أي service role key في GitHub.
