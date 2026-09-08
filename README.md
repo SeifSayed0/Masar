@@ -27,3 +27,15 @@ MASAR 3.0 يستخدم طبقة تخزين محلية `localStorage` تحت ال
 
 ## Supabase
 `supabase/schema.sql` هو مخطط قاعدة البيانات، لكنه **ليس اتصالًا سحابيًا تلقائيًا**. لا تضع أي service role key في GitHub.
+
+## Cloud mode (Supabase)
+
+MASAR 3.1 keeps working in local mode until Supabase is configured. To enable accounts and cloud persistence:
+
+1. Open `supabase/config.js`.
+2. Set your Supabase Project URL and **Publishable key**. Do not use or expose a `service_role`/secret key in the browser.
+3. In Supabase SQL Editor, run `supabase/schema.sql`.
+4. In Supabase Auth, configure your site URL and redirect URL to your deployed MASAR URL. Hosted Supabase projects may require email confirmation by default.
+5. Deploy the repository again on Vercel.
+
+The browser client uses `@supabase/supabase-js` and persistent auth sessions. This follows Supabase's browser client and password-auth flow. See the official docs: https://supabase.com/docs/reference/javascript/initializing and https://supabase.com/docs/guides/auth/passwords.
