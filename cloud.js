@@ -1,18 +1,90 @@
 (() => {
   const cfg = window.MASAR_SUPABASE || {};
-  const ready = Boolean(window.supabase && cfg.url && cfg.publishableKey && !cfg.url.includes('YOUR-PROJECT') && !cfg.publishableKey.includes('YOUR_'));
+  const ready = Boolean(
+    window.supabase &&
+    cfg.url &&
+    cfg.publishableKey &&
+    !cfg.url.includes('YOUR-PROJECT') &&
+    !cfg.publishableKey.includes('YOUR_')
+  );
+
   let client = null;
   let syncing = false;
   let user = null;
+  let bootstrapped = false;
 
   if (ready) {
     client = window.supabase.createClient(cfg.url, cfg.publishableKey, {
-      auth: { autoRefreshToken: true, persistSession: true, detectSessionInUrl: true }
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: true,
+        flowType: 'pkce'
+      }
     });
   }
 
-  const isUuid = v => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+  const isUuid = v =>
+    typeof v === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+
   const clone = x => JSON.parse(JSON.stringify(x));
+  const redirectUrl = () => location.origin + location.pathname;
+
+  function authErrorMessage(error) {
+    const message = String(error?.message || error || 'Something went wrong.');
+    const lower = message.toLowerCase();
+    if (lower.includes('email not confirmed')) {
+      return 'البريد الإلكتروني لم يتم تأكيده بعد. افتح رسالة التأكيد من Supabase ثم جرّب تسجيل الدخول مرة أخرى.';
+    }
+    if (lower.includes('invalid login credentials')) {
+      return 'البريد الإلكتروني أو كلمة المرور غير صحيحة.';
+    }
+    return message;
+  }
+
+  async function handleAuthCallback() {
+    if (!client) return false;
+
+    const url = new URL(window.location.href);
+    const code = url.searchParams.get('code');
+    const hash = new URLSearchParams(url.hash.replace(/^#/, ''));
+    const hasTokens = hash.has('access_token') && hash.has('refresh_token');
+
+    try {
+      // PKCE confirmation / magic-link callback.
+      if (code) {
+        const { data, error } = await client.auth.exchangeCodeForSession(code);
+        if (error) {
+          console.warn('MASAR auth callback exchange failed:', error);
+          return false;
+        }
+        user = data.session?.user || data.user || null;
+        history.replaceState({}, document.title, url.pathname);
+        return Boolean(user);
+      }
+
+      // Legacy/implicit callback. Supabase JS can normally process this itself,
+      // but explicitly setting the session makes the behavior deterministic.
+      if (hasTokens) {
+        const { data, error } = await client.auth.setSession({
+          access_token: hash.get('access_token'),
+          refresh_token: hash.get('refresh_token')
+        });
+        if (error) {
+          console.warn('MASAR token callback failed:', error);
+          return false;
+        }
+        user = data.session?.user || null;
+        history.replaceState({}, document.title, url.pathname);
+        return Boolean(user);
+      }
+    } catch (e) {
+      console.warn('MASAR auth callback error:', e);
+    }
+
+    return false;
+  }
 
   async function accountModal() {
     if (!client) {
@@ -24,8 +96,10 @@
       );
       return;
     }
-    const { data } = await client.auth.getUser();
-    user = data.user || null;
+
+    const { data, error } = await client.auth.getUser();
+    if (!error) user = data.user || null;
+
     if (user) {
       window.MASAR.modal(
         window.MASAR.t('student'),
@@ -35,6 +109,7 @@
       );
       return;
     }
+
     renderAuth('signin');
   }
 
@@ -46,8 +121,11 @@
       `<form id="cloud-auth-form" class="form-grid" novalidate>
         ${signup ? `<div class="field full"><label>Name</label><input id="cloud-name" autocomplete="name" maxlength="80" required></div>` : ''}
         <div class="field full"><label>Email</label><input id="cloud-email" type="email" autocomplete="email" required></div>
-        <div class="field full"><label>Password</label><input id="cloud-password" type="password" autocomplete="current-password" minlength="6" required></div>
+        <div class="field full"><label>Password</label><input id="cloud-password" type="password" autocomplete="${signup ? 'new-password' : 'current-password'}" minlength="6" required></div>
         <div id="cloud-auth-error" class="form-error full" hidden></div>
+        <div id="cloud-resend-wrap" class="full" hidden>
+          <button type="button" class="text-btn" data-cloud="resend-confirmation">Resend confirmation email</button>
+        </div>
         <div class="full auth-switch"><span>${signup ? 'Already have an account?' : 'New to Masar?'}</span><button type="button" class="text-btn" data-cloud="toggle-auth">${signup ? 'Sign in' : 'Create account'}</button></div>
       </form>`,
       `<button class="btn" data-action="close-modal">${window.MASAR.t('cancel')}</button><button class="btn btn-primary" data-cloud="submit-auth">${signup ? 'Create account' : 'Sign in'}</button>`
@@ -56,105 +134,344 @@
   }
 
   async function authSubmit() {
+    if (!client) return;
+
     const root = document.getElementById('modal-root');
     const mode = root.dataset.authMode || 'signin';
     const email = document.getElementById('cloud-email')?.value.trim();
     const password = document.getElementById('cloud-password')?.value;
     const name = document.getElementById('cloud-name')?.value.trim() || '';
     const err = document.getElementById('cloud-auth-error');
+    const resend = document.getElementById('cloud-resend-wrap');
+
     if (!email || !password || password.length < 6 || (mode === 'signup' && !name)) {
-      err.hidden = false; err.textContent = 'Please complete the form. Password must be at least 6 characters.'; return;
-    }
-    err.hidden = true;
-    const button = document.querySelector('[data-cloud="submit-auth"]');
-    button.disabled = true;
-    let result;
-    if (mode === 'signup') {
-      result = await client.auth.signUp({ email, password, options: { data: { name, major: window.MASAR.getState().student.major || '' }, emailRedirectTo: location.origin + location.pathname } });
-    } else {
-      result = await client.auth.signInWithPassword({ email, password });
-    }
-    button.disabled = false;
-    if (result.error) { err.hidden = false; err.textContent = result.error.message; return; }
-    if (mode === 'signup' && !result.data.session) {
-      window.MASAR.modal('Check your email', 'Supabase may require email confirmation.', '<div class="empty"><strong>Account created.</strong><p>Confirm your email, then return and sign in.</p></div>', `<button class="btn btn-primary" data-action="close-modal">${window.MASAR.t('close')}</button>`);
+      err.hidden = false;
+      err.textContent = 'Please complete the form. Password must be at least 6 characters.';
       return;
     }
+
+    err.hidden = true;
+    resend.hidden = true;
+
+    const button = document.querySelector('[data-cloud="submit-auth"]');
+    button.disabled = true;
+
+    let result;
+    try {
+      if (mode === 'signup') {
+        result = await client.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              name,
+              major: window.MASAR.getState().student.major || ''
+            },
+            emailRedirectTo: redirectUrl()
+          }
+        });
+      } else {
+        result = await client.auth.signInWithPassword({ email, password });
+      }
+    } catch (e) {
+      result = { error: e };
+    } finally {
+      button.disabled = false;
+    }
+
+    if (result.error) {
+      err.hidden = false;
+      err.textContent = authErrorMessage(result.error);
+      if (String(result.error.message || '').toLowerCase().includes('email not confirmed')) {
+        resend.hidden = false;
+      }
+      return;
+    }
+
+    if (mode === 'signup' && !result.data.session) {
+      window.MASAR.modal(
+        'Check your email',
+        'One more step before your account is ready.',
+        `<div class="empty"><strong>Account created.</strong><p>We sent a confirmation link to <strong>${email.replace(/</g, '&lt;')}</strong>.</p><p>Open the email, tap the confirmation link, and Masar will finish the sign-in automatically. You can then return to Masar normally.</p></div>`,
+        `<button class="btn" data-action="close-modal">${window.MASAR.t('close')}</button><button class="btn btn-primary" data-cloud="resend-confirmation" data-resend-email="${email.replace(/"/g, '&quot;')}">Resend email</button>`
+      );
+      return;
+    }
+
     user = result.data.user || result.data.session?.user || null;
-    await loadCloud();
+    if (user) await loadCloud();
     window.MASAR.closeModal();
     window.MASAR.render();
     window.MASAR.toast('Cloud sync connected');
   }
 
+  async function resendConfirmation(emailOverride) {
+    if (!client) return;
+    const email = emailOverride || document.getElementById('cloud-email')?.value.trim();
+    if (!email) return;
+
+    const button = document.querySelector('[data-cloud="resend-confirmation"]');
+    if (button) button.disabled = true;
+
+    const { error } = await client.auth.resend({
+      type: 'signup',
+      email,
+      options: { emailRedirectTo: redirectUrl() }
+    });
+
+    if (button) button.disabled = false;
+
+    if (error) {
+      window.MASAR.toast(authErrorMessage(error));
+      return;
+    }
+    window.MASAR.toast('Confirmation email sent');
+  }
+
   async function loadCloud() {
     if (!client || !user) return;
+
+    const uid = user.id;
     const [profile, courses, exams, tasks, sessions] = await Promise.all([
-      client.from('profiles').select('*').eq('id', user.id).maybeSingle(),
-      client.from('courses').select('*').order('created_at'),
-      client.from('exams').select('*').order('date'),
-      client.from('tasks').select('*').order('date'),
-      client.from('study_sessions').select('*').order('date')
+      client.from('profiles').select('*').eq('id', uid).maybeSingle(),
+      client.from('courses').select('*').eq('user_id', uid).order('created_at'),
+      client.from('exams').select('*').eq('user_id', uid).order('date'),
+      client.from('tasks').select('*').eq('user_id', uid).order('date'),
+      client.from('study_sessions').select('*').eq('user_id', uid).order('date')
     ]);
-    const s = clone(window.MASAR.getState());
-    if (profile.data) {
-      s.student = { name: profile.data.name || s.student.name, major: profile.data.major || s.student.major };
-      s.lang = profile.data.language || s.lang; s.theme = profile.data.theme || s.theme;
-      s.settings = { adaptive: profile.data.adaptive ?? true, notifications: profile.data.notifications ?? true };
+
+    const errors = [profile, courses, exams, tasks, sessions].filter(x => x.error);
+    if (errors.length) {
+      console.warn('MASAR cloud load failed:', errors.map(x => x.error));
+      return;
     }
-    if (courses.data?.length) s.courses = courses.data.map(x => ({id:x.id,name:x.name,code:x.code||'',progress:x.progress||0,color:'blue'}));
-    if (exams.data?.length) s.exams = exams.data.map(x => ({id:x.id,title:x.title,courseId:x.course_id,date:x.date,readiness:x.readiness||0}));
-    if (tasks.data?.length) s.tasks = tasks.data.map(x => ({id:x.id,title:x.title,courseId:x.course_id,date:x.date,minutes:x.minutes,priority:x.priority,done:x.done}));
-    if (sessions.data) s.sessions = sessions.data.map(x => ({id:x.id,taskId:x.task_id,title:x.title,courseId:x.course_id,minutes:x.minutes,date:x.date}));
+
+    const s = clone(window.MASAR.getState());
+
+    if (profile.data) {
+      s.student = {
+        name: profile.data.name || s.student.name,
+        major: profile.data.major || s.student.major
+      };
+      s.lang = profile.data.language || s.lang;
+      s.theme = profile.data.theme || s.theme;
+      s.settings = {
+        adaptive: profile.data.adaptive ?? true,
+        notifications: profile.data.notifications ?? true
+      };
+    }
+
+    // An empty remote collection should also be respected. This prevents old
+    // local records from silently reappearing after the user signs in.
+    s.courses = (courses.data || []).map(x => ({
+      id: x.id,
+      name: x.name,
+      code: x.code || '',
+      progress: x.progress || 0,
+      color: 'blue'
+    }));
+    s.exams = (exams.data || []).map(x => ({
+      id: x.id,
+      title: x.title,
+      courseId: x.course_id,
+      date: x.date,
+      readiness: x.readiness || 0
+    }));
+    s.tasks = (tasks.data || []).map(x => ({
+      id: x.id,
+      title: x.title,
+      courseId: x.course_id,
+      date: x.date,
+      minutes: x.minutes,
+      priority: x.priority,
+      done: x.done
+    }));
+    s.sessions = (sessions.data || []).map(x => ({
+      id: x.id,
+      taskId: x.task_id,
+      title: x.title,
+      courseId: x.course_id,
+      minutes: x.minutes,
+      date: x.date
+    }));
+
+    // setState triggers local persistence only; the syncing guard prevents a
+    // cloud-load from starting a second upload cycle.
     window.MASAR.setState(s);
   }
 
   async function syncCloud() {
     if (!client || !user || syncing) return;
     syncing = true;
+
     try {
+      const uid = user.id;
       const s = clone(window.MASAR.getState());
-      await client.from('profiles').upsert({ id:user.id, name:s.student.name, major:s.student.major, language:s.lang, theme:s.theme, adaptive:s.settings.adaptive, notifications:s.settings.notifications });
+
+      const profileResult = await client.from('profiles').upsert({
+        id: uid,
+        name: s.student.name,
+        major: s.student.major,
+        language: s.lang,
+        theme: s.theme,
+        adaptive: s.settings.adaptive,
+        notifications: s.settings.notifications
+      });
+      if (profileResult.error) throw profileResult.error;
+
       const maps = new Map();
+
       for (const c of s.courses) {
-        const payload = {user_id:user.id,name:c.name,code:c.code||'',progress:Math.max(0,Math.min(100,Number(c.progress)||0))};
-        if (isUuid(c.id)) { await client.from('courses').upsert({id:c.id,...payload}); maps.set(c.id,c.id); }
-        else { const {data,error}=await client.from('courses').insert(payload).select('id').single(); if(!error&&data){maps.set(c.id,data.id); c.id=data.id;} }
+        const payload = {
+          user_id: uid,
+          name: c.name,
+          code: c.code || '',
+          progress: Math.max(0, Math.min(100, Number(c.progress) || 0))
+        };
+
+        if (isUuid(c.id)) {
+          const { error } = await client.from('courses').upsert({ id: c.id, ...payload });
+          if (error) throw error;
+          maps.set(c.id, c.id);
+        } else {
+          const { data, error } = await client.from('courses').insert(payload).select('id').single();
+          if (error) throw error;
+          maps.set(c.id, data.id);
+          c.id = data.id;
+        }
       }
+
       for (const e of s.exams) {
-        const payload={user_id:user.id,title:e.title,date:e.date,readiness:e.readiness||0,course_id:maps.get(e.courseId)||e.courseId||null};
-        if(isUuid(e.id)) await client.from('exams').upsert({id:e.id,...payload}); else { const {data}=await client.from('exams').insert(payload).select('id').single(); if(data)e.id=data.id; }
+        const payload = {
+          user_id: uid,
+          title: e.title,
+          date: e.date,
+          readiness: Math.max(0, Math.min(100, Number(e.readiness) || 0)),
+          course_id: maps.get(e.courseId) || (isUuid(e.courseId) ? e.courseId : null)
+        };
+        if (isUuid(e.id)) {
+          const { error } = await client.from('exams').upsert({ id: e.id, ...payload });
+          if (error) throw error;
+        } else {
+          const { data, error } = await client.from('exams').insert(payload).select('id').single();
+          if (error) throw error;
+          if (data) e.id = data.id;
+        }
       }
+
       for (const x of s.tasks) {
-        const payload={user_id:user.id,title:x.title,date:x.date,minutes:x.minutes,priority:x.priority,done:Boolean(x.done),course_id:maps.get(x.courseId)||x.courseId||null};
-        if(isUuid(x.id)) await client.from('tasks').upsert({id:x.id,...payload}); else { const {data}=await client.from('tasks').insert(payload).select('id').single(); if(data)x.id=data.id; }
+        const payload = {
+          user_id: uid,
+          title: x.title,
+          date: x.date,
+          minutes: x.minutes,
+          priority: x.priority,
+          done: Boolean(x.done),
+          course_id: maps.get(x.courseId) || (isUuid(x.courseId) ? x.courseId : null)
+        };
+        if (isUuid(x.id)) {
+          const { error } = await client.from('tasks').upsert({ id: x.id, ...payload });
+          if (error) throw error;
+        } else {
+          const { data, error } = await client.from('tasks').insert(payload).select('id').single();
+          if (error) throw error;
+          if (data) x.id = data.id;
+        }
       }
+
       for (const x of s.sessions) {
-        const payload={user_id:user.id,task_id:isUuid(x.taskId)?x.taskId:null,title:x.title,course_id:maps.get(x.courseId)||x.courseId||null,minutes:x.minutes,date:x.date};
-        if(isUuid(x.id)) await client.from('study_sessions').upsert({id:x.id,...payload}); else await client.from('study_sessions').insert(payload);
+        const payload = {
+          user_id: uid,
+          task_id: isUuid(x.taskId) ? x.taskId : null,
+          title: x.title,
+          course_id: maps.get(x.courseId) || (isUuid(x.courseId) ? x.courseId : null),
+          minutes: x.minutes,
+          date: x.date
+        };
+        if (isUuid(x.id)) {
+          const { error } = await client.from('study_sessions').upsert({ id: x.id, ...payload });
+          if (error) throw error;
+        } else {
+          const { error } = await client.from('study_sessions').insert(payload);
+          if (error) throw error;
+        }
       }
+
+      // Save newly assigned UUIDs locally without triggering another upload.
       window.MASAR.setState(s);
-    } catch (e) { console.warn('MASAR cloud sync failed',e); }
-    finally { syncing=false; }
+    } catch (e) {
+      console.warn('MASAR cloud sync failed', e);
+    } finally {
+      syncing = false;
+    }
   }
 
-  window.addEventListener('masar:state-change', () => { if (user) syncCloud(); });
-  document.addEventListener('click', e => {
-    const el=e.target.closest('[data-cloud]'); if(!el)return;
-    const action=el.dataset.cloud;
-    if(action==='account'){accountModal();}
-    if(action==='toggle-auth'){renderAuth((document.getElementById('modal-root').dataset.authMode||'signin')==='signin'?'signup':'signin');}
-    if(action==='submit-auth'){authSubmit();}
-    if(action==='signout'){client.auth.signOut().then(()=>{user=null; window.MASAR.closeModal(); window.MASAR.toast('Signed out');});}
+  window.addEventListener('masar:state-change', () => {
+    if (user) syncCloud();
   });
-  document.addEventListener('click', e => { if(e.target.closest('[data-action="account"]')) accountModal(); });
 
-  async function bootstrap(){
-    if(!client) return;
-    const {data}=await client.auth.getSession();
-    user=data.session?.user||null;
-    client.auth.onAuthStateChange(async (_event, session)=>{ user=session?.user||null; if(user) await loadCloud(); });
-    if(user) await loadCloud();
+  document.addEventListener('click', e => {
+    const el = e.target.closest('[data-cloud]');
+    if (!el) return;
+
+    const action = el.dataset.cloud;
+    if (action === 'account') accountModal();
+    if (action === 'toggle-auth') {
+      const mode = document.getElementById('modal-root').dataset.authMode || 'signin';
+      renderAuth(mode === 'signin' ? 'signup' : 'signin');
+    }
+    if (action === 'submit-auth') authSubmit();
+    if (action === 'resend-confirmation') resendConfirmation(el.dataset.resendEmail);
+    if (action === 'signout') {
+      client.auth.signOut().then(({ error }) => {
+        if (error) {
+          window.MASAR.toast(authErrorMessage(error));
+          return;
+        }
+        user = null;
+        window.MASAR.closeModal();
+        window.MASAR.toast('Signed out');
+      });
+    }
+  });
+
+  document.addEventListener('click', e => {
+    if (e.target.closest('[data-action="account"]')) accountModal();
+  });
+
+  async function bootstrap() {
+    if (!client) return;
+
+    // Register the listener BEFORE reading the session so a confirmation
+    // redirect cannot race past the SIGNED_IN event.
+    client.auth.onAuthStateChange((_event, session) => {
+      user = session?.user || null;
+      if (user) {
+        // Do not await inside the auth callback; Supabase recommends keeping
+        // the callback free of long-running Supabase calls.
+        setTimeout(() => loadCloud(), 0);
+      }
+    });
+
+    await handleAuthCallback();
+
+    const { data, error } = await client.auth.getSession();
+    if (error) {
+      console.warn('MASAR getSession failed:', error);
+      return;
+    }
+
+    user = data.session?.user || user || null;
+    bootstrapped = true;
+
+    if (user) {
+      await loadCloud();
+      // If the app loaded from a confirmation URL, give the user a clear cue.
+      if (new URLSearchParams(location.search).has('code')) {
+        window.MASAR.toast('Email confirmed — Cloud sync connected');
+      }
+    }
   }
+
   bootstrap();
 })();
