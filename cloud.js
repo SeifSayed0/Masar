@@ -151,7 +151,11 @@
   }
 
   async function authSubmit() {
-    if (!client) return;
+    if (!client) {
+      const err = document.getElementById('cloud-auth-error');
+      if (err) { err.hidden = false; err.textContent = 'MASAR is not connected to Supabase. Check supabase/config.js and redeploy.'; }
+      return;
+    }
 
     const root = document.getElementById('modal-root');
     const mode = root.dataset.authMode || 'signin';
@@ -172,6 +176,7 @@
 
     const button = document.querySelector('[data-cloud="submit-auth"]');
     button.disabled = true;
+    button.textContent = mode === 'signup' ? 'Creating account…' : 'Signing in…';
 
     let result;
     try {
@@ -194,6 +199,7 @@
       result = { error: e };
     } finally {
       button.disabled = false;
+      button.textContent = mode === 'signup' ? 'Create account' : 'Sign in';
     }
 
     if (result.error) {
@@ -465,19 +471,24 @@
     if (user) syncCloud();
   });
 
+  // Auth controls are handled in capture phase so the generic MASAR click router
+  // cannot accidentally consume/close the modal before authSubmit() runs.
   document.addEventListener('click', e => {
     const el = e.target.closest('[data-cloud]');
     if (!el) return;
 
+    e.preventDefault();
+    e.stopImmediatePropagation();
+
     const action = el.dataset.cloud;
     if (action === 'account') accountModal();
-    if (action === 'toggle-auth') {
+    else if (action === 'toggle-auth') {
       const mode = document.getElementById('modal-root').dataset.authMode || 'signin';
       renderAuth(mode === 'signin' ? 'signup' : 'signin');
     }
-    if (action === 'submit-auth') authSubmit();
-    if (action === 'resend-confirmation') resendConfirmation(el.dataset.resendEmail);
-    if (action === 'signout') {
+    else if (action === 'submit-auth') authSubmit();
+    else if (action === 'resend-confirmation') resendConfirmation(el.dataset.resendEmail);
+    else if (action === 'signout') {
       client.auth.signOut().then(({ error }) => {
         if (error) {
           window.MASAR.toast(authErrorMessage(error));
@@ -488,7 +499,15 @@
         window.MASAR.toast('Signed out');
       });
     }
-  });
+  }, true);
+
+  // Also handle Enter inside the auth form.
+  document.addEventListener('submit', e => {
+    if (e.target?.id !== 'cloud-auth-form') return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    authSubmit();
+  }, true);
 
   document.addEventListener('click', e => {
     if (e.target.closest('[data-action="account"]')) accountModal();
